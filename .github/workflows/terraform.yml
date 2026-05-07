@@ -1,19 +1,15 @@
 name: Terraform Infrastructure
 
-# PR to main        → plan only
-# Push/merge to main → plan (auto) → approval gate → apply
-# Manual dispatch    → plan, apply, or destroy dev environment
-
 on:
   push:
     branches: [main]
     paths:
-      - 'envs/dev/**'
+      - 'envs/**'
       - 'modules/**'
   pull_request:
     branches: [main]
     paths:
-      - 'envs/dev/**'
+      - 'envs/**'
       - 'modules/**'
   workflow_dispatch:
     inputs:
@@ -24,61 +20,53 @@ on:
         type: choice
         options: [plan, apply, destroy]
       confirm_destroy:
-        description: 'Type "destroy" to confirm destruction (required when action=destroy)'
+        description: 'Type "destroy" to confirm destruction'
         required: false
         default: ''
 
 permissions:
   contents: read
+  id-token: write
 
 env:
   TF_VERSION: '1.10.0'
   AWS_REGION: us-east-1
 
-# Prevent parallel runs on the same branch — avoids state conflicts
 concurrency:
   group: terraform-${{ github.ref }}
-  cancel-in-progress: false   # wait, don't cancel — safer for Terraform
+  cancel-in-progress: false
 
 jobs:
-  # ── Plan ──────────────────────────────────────────────────────────────────
   plan:
     name: Terraform Plan
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: envs/dev
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Terraform ${{ env.TF_VERSION }}
+      - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials using GitHub OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: arn:aws:iam::763960054907:role/pharma-dev-github-actions-role
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Terraform Format Check
-        id: fmt
-        run: terraform fmt -check -recursive
-        continue-on-error: true
+        run: terraform fmt -check -recursive ../..
 
       - name: Terraform Init
-        id: init
         run: terraform init
 
       - name: Terraform Validate
-        id: validate
         run: terraform validate -no-color
 
       - name: Terraform Plan
-        id: plan
         run: |
           terraform plan \
             -var="db_password=${{ secrets.DEV_DB_PASSWORD }}" \
@@ -86,21 +74,14 @@ jobs:
             -var="github_org=oolusoga" \
             -out=tfplan \
             -no-color
-        continue-on-error: true
-
-      - name: Check plan status
-        if: steps.plan.outcome == 'failure'
-        run: exit 1
 
       - name: Upload plan file
-        if: steps.plan.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: tfplan
           path: envs/dev/tfplan
           retention-days: 1
 
-  # ── Apply ─────────────────────────────────────────────────────────────────
   apply:
     name: Terraform Apply
     runs-on: ubuntu-latest
@@ -108,24 +89,22 @@ jobs:
     if: |
       (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
-    environment: dev   # ← pauses here and waits for manual approval
+    environment: dev
     defaults:
       run:
         working-directory: envs/dev
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Terraform ${{ env.TF_VERSION }}
+      - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials using GitHub OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: arn:aws:iam::763960054907:role/pharma-dev-github-actions-role
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Terraform Init
@@ -138,13 +117,8 @@ jobs:
           path: envs/dev
 
       - name: Terraform Apply
-        run: |
-          terraform apply \
-            -auto-approve \
-            -no-color \
-            tfplan
+        run: terraform apply -auto-approve -no-color tfplan
 
-  # ── Destroy ───────────────────────────────────────────────────────────────
   destroy:
     name: Terraform Destroy
     runs-on: ubuntu-latest
@@ -152,24 +126,22 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.action == 'destroy' &&
       github.event.inputs.confirm_destroy == 'destroy'
-    environment: dev   # ← approval gate for destroy too
+    environment: dev
     defaults:
       run:
         working-directory: envs/dev
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Terraform ${{ env.TF_VERSION }}
+      - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials using GitHub OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: arn:aws:iam::763960054907:role/pharma-dev-github-actions-role
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Terraform Init
@@ -180,6 +152,6 @@ jobs:
           terraform destroy \
             -var="db_password=${{ secrets.DEV_DB_PASSWORD }}" \
             -var="jwt_secret=${{ secrets.DEV_JWT_SECRET }}" \
-            -var="github_org=ravdy" \
+            -var="github_org=oolusoga" \
             -auto-approve \
             -no-color
